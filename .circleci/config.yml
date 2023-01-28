@@ -53,8 +53,9 @@ commands:
             then
               cd ~/project/backend
               npm install
+              npm audit fix --force
               npm run migration:revert
-              npm audit fix --force --audit-level=critical
+              npm audit fix --force
             fi
             
 jobs:
@@ -226,8 +227,9 @@ jobs:
           command: |
             cd backend
             npm install
+            npm audit fix --force
             npm run migration > migrations_dump.txt
-            npm audit fix --force --audit-level=critical
+            npm audit fix --force
       - run:
           name: Send migration results to kvdb.io
           command: |
