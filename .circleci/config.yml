@@ -317,7 +317,6 @@ jobs:
             cd backend
             npm run build
 
-            cd backend
             tar -czf artifact.tar.gz dist/* package*
 
             cd .circleci
