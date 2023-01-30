@@ -55,9 +55,9 @@ commands:
           name: Destroy environments
           when: on_fail
           command: |
+            aws cloudformation delete-stack --stack-name udapeople-backend-<< parameters.Workflow_ID >>
             aws s3 rm s3://udapeople-<<parameters.Workflow_ID>> --recursive
             aws cloudformation delete-stack --stack-name udapeople-frontend-<< parameters.Workflow_ID >>
-            aws cloudformation delete-stack --stack-name udapeople-backend-<< parameters.Workflow_ID >>
             
   revert-migrations:
     description: Revert the last migration if successfully run in the current workflow.
@@ -245,7 +245,7 @@ jobs:
           command: |
             # cd .circleci/ansible
             # cat inventory.txt
-            ansible-playbook  .circleci/ansible/configure-server.yml -i .circleci/ansible/inventory.txt
+            ansible-playbook -i .circleci/ansible/configure-server.yml .circleci/ansible/inventory.txt
       
       - destroy-environment
       - notify_on_failure
