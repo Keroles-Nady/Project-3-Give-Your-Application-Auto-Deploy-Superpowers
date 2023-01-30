@@ -1,6 +1,16 @@
 version: 2.1
 
+orbs: 
+    slack: circleci/slack@4.10.1
+
 commands:
+  notify_on_failure:
+    steps:
+      - slack/notify:
+          event: fail
+          channel: cicd-pipline
+          template: basic_fail_1
+
   install_awscli:
     description: Install AWS CLI V2
     steps: 
@@ -19,7 +29,7 @@ commands:
           name: Install Ansible LTS Version
           command: |
             sudo apt update
-            sudo apt install software-properties-common
+            sudo apt install software-properties-common -y
             sudo add-apt-repository --yes --update ppa:ansible/ansible
             sudo apt install ansible -y
 
@@ -86,6 +96,7 @@ jobs:
       - save_cache:
           paths: [frontend/node_modules]
           key: frontend-deps
+      - notify_on_failure
 
   build-backend:
     docker:
@@ -103,6 +114,8 @@ jobs:
       - save_cache:
           paths: [backend/node_modules]
           key: backend-deps
+      
+      - notify_on_failure
 
   test-frontend:
     docker:
@@ -117,6 +130,8 @@ jobs:
             cd frontend
             npm install
             npm test
+
+      - notify_on_failure
 
   test-backend:
     docker:
@@ -134,7 +149,9 @@ jobs:
       - save_cache:
           paths: [backend/node_modules]
           key: backend-deps
-            
+        
+      - notify_on_failure
+
   scan-frontend:
     docker:
       - image: cimg/node:13.8.0
@@ -149,6 +166,8 @@ jobs:
             npm install
             npm audit fix --force --audit-level=critical
             npm audit fix --force --audit-level=critical
+      
+      - notify_on_failure
 
   scan-backend:
     docker:
@@ -164,6 +183,8 @@ jobs:
              npm install
              npm audit fix --force --audit-level=critical
              npm audit fix --force --audit-level=critical
+      
+      - notify_on_failure
 
   deploy-infrastructure:
     docker:
@@ -204,8 +225,8 @@ jobs:
           paths:
             - project/.circleci/ansible/inventory.txt
 
-      # Here's where you will add some code to rollback on failure      
       - destroy-environment
+      - notify_on_failure
 
 
   configure-infrastructure:
@@ -222,22 +243,23 @@ jobs:
       - run:
           name: Configure server
           command: |
-            cd .circleci/ansible
-            cat inventory.txt
-
-            ansible-playbook -i inventory.txt configure-server.yml
+            # cd .circleci/ansible
+            # cat inventory.txt
+            ansible-playbook -i .circleci/ansible/inventory.txt .circleci/ansible/configure-server.yml
+      
       - destroy-environment
+      - notify_on_failure
 
   run-migrations:
     docker:
-      # - image: cimg/node:13.8.0
-      - image: cimg/python:3.10
+      - image: cimg/node:13.8.0
+      # - image: cimg/python:3.10
     steps:
       - checkout
       - install_awscli
-      - install_nodejs
+      # - install_nodejs
       - restore_cache:
-          keys: [backend-deps]
+          keys: [backend-build]
       - run:
           name: Run migrations
           command: |
@@ -245,6 +267,7 @@ jobs:
             npm install
             npm run migrations > migrations_dump.txt
             cat migrations_dump.txt
+
       - run:
           name: Send migration results to kvdb.io
           command: |
@@ -252,23 +275,27 @@ jobs:
             then
               curl -d '1' https://kvdb.io/4WJQCZwMVe5oyt3aztFcCq/migration_${CIRCLE_WORKFLOW_ID:0:7}
             fi
-      - destroy-environment
+      
       - revert-migrations
+      - destroy-environment
+      - notify_on_failure
 
   deploy-frontend:
     docker:
-      - image: cimg/base:stable
+      # - image: cimg/base:stable
+      - image: cimg/node:13.8.0
     steps:
       - checkout
       - install_awscli
-      - install_nodejs
+      # - install_nodejs
       - restore_cache:
-          keys: [frontend-deps]
+          keys: [frontend-build]
       - run:
           name: Install dependencies
           command: |
             cd frontend
             npm install
+            sudo apt-get install tar gzip -y
       - run:
           name: Get backend url
           command: |
@@ -276,18 +303,21 @@ jobs:
               --filters "Name=tag:Name,Values=backend-${CIRCLE_WORKFLOW_ID:0:7}" \
               --query 'Reservations[*].Instances[*].PublicIpAddress' \
               --output text)
-                    
-            echo "API_URL=http://${BACKEND_PUBLIC_IP}:3030" >> frontend/.env
+            export API_URL="http://${BACKEND_IP}:3030"
+            echo "API_URL = ${API_URL}"        
+            echo API_URL="http://${BACKEND_PUBLIC_IP}:3030" >> frontend/.env
             cat frontend/.env
       - run:
           name: Deploy frontend objects
           command: |
             cd frontend
             npm run build
+            tar -czvf artifact-"${CIRCLE_WORKFLOW_ID:0:7}".tar.gz dist
             aws s3 cp dist s3://udapeople-${CIRCLE_WORKFLOW_ID:0:7} --recursive
 
       - destroy-environment
       - revert-migrations
+      - notify_on_failure
 
   deploy-backend:
     docker:
@@ -326,11 +356,11 @@ jobs:
 
             cd .circleci/ansible
             cat inventory.txt
-            ansible-playbook -i inventory.txt deploy-backend.yml
+            ansible-playbook -i .circleci/ansible/inventory.txt .circleci/ansible/deploy-backend.yml
 
       - destroy-environment
       - revert-migrations
-
+      - notify_on_failure
 
   smoke-test:
     docker:
@@ -369,6 +399,7 @@ jobs:
 
       - destroy-environment
       - revert-migrations
+      - notify_on_failure
 
   cloudfront-update:
     docker:
@@ -396,33 +427,42 @@ jobs:
       
       - destroy-environment
       - revert-migrations
+      - notify_on_failure
 
   cleanup:
     docker:
-      - image: cimg/base:stable
+      # - image: cimg/base:stable
+      - image: amazon/aws-cli
     steps:
       - checkout
-      - install_awscli
-      - install_nodejs
       - run:
           name: Remove old stacks and files
           command: |
-            
-            export OldWorkflowID=$(curl --insecure https://kvdb.io/4WJQCZwMVe5oyt3aztFcCq/old_workflow_id-2)
-            echo Old Workflow ID: $OldWorkflowID 
-            
+            yum install -y curl 
             export STACKS=($(aws cloudformation list-stacks \
-              --query "StackSummaries[*].StackName" \
-              --stack-status-filter CREATE_COMPLETE \
-              --no-paginate --output text)) 
+                --query "StackSummaries[*].StackName" \
+                --stack-status-filter CREATE_COMPLETE --no-paginate --output text)) 
             echo Stack names: "${STACKS[@]}"
-
-            if [[ udapeople-${WorkflowID} =~ ${OldWorkflowID} ]]
+            export OldWorkflowID=$(curl --insecure https://kvdb.io/${KVDB_BUCKET}/old_workflow_id)
+            echo Old Workflow ID: $OldWorkflowID 
+            if [[ "${STACKS[@]}" =~ "${OldWorkflowID}" ]]
             then
               aws s3 rm "s3://udapeople-${OldWorkflowID}" --recursive
               aws cloudformation delete-stack --stack-name "udapeople-backend-${OldWorkflowID}"
               aws cloudformation delete-stack --stack-name "udapeople-frontend-${OldWorkflowID}"
-            fi
+              echo cleanup has been done
+            fi 
+      - notify_on_failure
+
+
+  notify_on_success:
+    docker:
+      - image: cimg/base:stable
+    steps:
+      - slack/notify:
+          event: pass
+          channel: cicd-pipeline
+          template: success_tagged_deployment_1
 
 workflows:
   default:
@@ -456,3 +496,5 @@ workflows:
           requires: [smoke-test]
       - cleanup:
           requires: [cloudfront-update]
+      - notify_on_success:
+          requires: [test-frontend, test-backend, scan-frontend, scan-backend, deploy-infrastructure, configure-infrastructure, run-migrations, deploy-frontend, deploy-backend, smoke-test, cloudfront-update, cleanup]
