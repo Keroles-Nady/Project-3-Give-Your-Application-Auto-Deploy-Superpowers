@@ -440,7 +440,6 @@ jobs:
       - run:
           name: Remove old stacks and files
           command: |
-            yum install -y curl 
             export STACKS=($(aws cloudformation list-stacks \
                 --query "StackSummaries[*].StackName" \
                 --stack-status-filter CREATE_COMPLETE --no-paginate --output text)) 
@@ -454,6 +453,7 @@ jobs:
               aws cloudformation delete-stack --stack-name "udapeople-frontend-${OldWorkflowID}"
               echo cleanup has been done
             fi 
+      
       - notify_on_failure
 
 
